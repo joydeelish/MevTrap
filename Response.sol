@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-contract MEVResponder {
+contract MEVAlertResponder {
     address public owner;
-    address public caller; // TrapConfig address (set after drosera apply)
+    address public caller;
 
-    event MEVDetected(
+    event MEVAlert(
         address indexed pair,
-        uint256 priceMoveBps,
-        uint256 volume0,
-        uint256 volume1,
-        uint256 blockGap,
-        address indexed triggeredBy
+        uint256 swapCount,
+        uint256 blockNumber
     );
 
     constructor() {
@@ -23,26 +20,16 @@ contract MEVResponder {
         _;
     }
 
-    function setCaller(address _caller) external {
+    function setCaller(address c) external {
         require(msg.sender == owner, "!owner");
-        caller = _caller;
+        caller = c;
     }
 
-    /// @notice Called by Drosera when MEV pattern is detected
     function respondToMEV(
         address pair,
-        uint256 priceMoveBps,
-        uint256 vol0,
-        uint256 vol1,
-        uint256 blockGap
+        uint256 swaps,
+        uint256 blk
     ) external onlyCaller {
-        emit MEVDetected(
-            pair,
-            priceMoveBps,
-            vol0,
-            vol1,
-            blockGap,
-            msg.sender
-        );
+        emit MEVAlert(pair, swaps, blk);
     }
 }
