@@ -8,7 +8,7 @@ drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
 [traps.mev_sandwich]
 path = "out/MEVSandwichTrap.sol/MEVSandwichTrap.json"
 
-response_contract = "0x6dDfa8202215e70C097307531c99b881ED4212F8"
+response_contract = "0xe917E50e566B8d3Ba7C3c9da755ccEaA50CA0622"
 response_function = "respondToMEV(address,uint256,uint256,uint256,uint256)"
 
 cooldown_period_blocks = 20
