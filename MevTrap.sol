@@ -1,60 +1,127 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-interface ITrap {
-    function collect() external view returns (bytes memory);
-    function shouldRespond(bytes[] calldata) external pure returns (bool, bytes memory);
+import {ITrap} from "drosera-contracts/interfaces/ITrap.sol";
+
+interface IUniswapV2Pair {
+    function getReserves()
+        external
+        view
+        returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
 }
 
-contract SwapBurstMEVTrap is ITrap {
-    // UniswapV2 Swap event signature
-    // Swap(address,uint256,uint256,uint256,uint256,address)
-    bytes32 constant SWAP_TOPIC =
-        keccak256("Swap(address,uint256,uint256,uint256,uint256,address)");
+contract SwapBurstHeuristicTrap is ITrap {
 
-    // Pair being monitored
+    // ✅ YOUR REAL PAIR
     address public constant PAIR =
-        0x0000000000000000000000000000000000000000; // replace with real pair
+        0xa4952b9d99106edC66ebfD44cB42495469c7b231;
 
-    // Minimum number of swaps in a block
-    uint256 public constant MIN_SWAPS = 3;
+    // Trigger if price change > 3%
+    uint256 public constant PRICE_IMPACT_BPS = 300;
 
-    // Collect: return swap logs in current block
-    function collect() external view override returns (bytes memory) {
-        return abi.encode(block.number);
+    // Ignore dust liquidity
+    uint256 public constant MIN_RESERVE = 1000;
+
+    struct CollectOutput {
+        uint256 blockNumber;
+        uint112 r0;
+        uint112 r1;
     }
 
-    /**
-     * collectOutputs will contain encoded block numbers
-     * Drosera provides logs separately to event-based traps
-     *
-     * This trap expects Swap logs attached to this block window
-     */
-    function shouldRespond(bytes[] calldata collectOutputs)
+    function collect() external view override returns (bytes memory) {
+        uint256 size;
+        assembly { size := extcodesize(PAIR) }
+
+        if (size == 0) return bytes("");
+
+        (bool ok, bytes memory ret) = PAIR.staticcall(
+            abi.encodeWithSelector(IUniswapV2Pair.getReserves.selector)
+        );
+
+        if (!ok || ret.length < 96) return bytes("");
+
+        (uint112 r0, uint112 r1, ) =
+            abi.decode(ret, (uint112, uint112, uint32));
+
+        return abi.encode(
+            CollectOutput({
+                blockNumber: block.number,
+                r0: r0,
+                r1: r1
+            })
+        );
+    }
+
+    function shouldRespond(bytes[] calldata data)
         external
         pure
         override
         returns (bool, bytes memory)
     {
-        if (collectOutputs.length == 0) return (false, bytes(""));
+        if (data.length < 2) return (false, bytes(""));
+        if (data[0].length == 0 || data[1].length == 0)
+            return (false, bytes(""));
 
-        // For event traps, Drosera injects decoded logs
-        // into collectOutputs[0]
-        // Format is chain-dependent; assume log count passed
+        CollectOutput memory a =
+            abi.decode(data[0], (CollectOutput));
+        CollectOutput memory b =
+            abi.decode(data[1], (CollectOutput));
 
-        uint256 swapCount = abi.decode(collectOutputs[0], (uint256));
+        CollectOutput memory cur =
+            (a.blockNumber >= b.blockNumber) ? a : b;
+        CollectOutput memory prev =
+            (a.blockNumber >= b.blockNumber) ? b : a;
 
-        if (swapCount >= MIN_SWAPS) {
-            return (
-                true,
-                abi.encode(
-                    PAIR,
-                    swapCount,
-                    block.number
-                )
-            );
-        }
+        if (cur.blockNumber == prev.blockNumber)
+            return (false, bytes(""));
 
-        return (false, bytes(""));
+        if (cur.blockNumber - prev.blockNumber > 2)
+            return (false, bytes(""));
+
+        if (
+            cur.r0 < MIN_RESERVE ||
+            cur.r1 < MIN_RESERVE ||
+            prev.r0 < MIN_RESERVE ||
+            prev.r1 < MIN_RESERVE
+        ) return (false, bytes(""));
+
+        uint256 prevPrice =
+            (uint256(prev.r1) * 1e18) / uint256(prev.r0);
+        uint256 curPrice =
+            (uint256(cur.r1) * 1e18) / uint256(cur.r0);
+
+        if (prevPrice == 0) return (false, bytes(""));
+
+        uint256 diff =
+            (curPrice > prevPrice)
+                ? (curPrice - prevPrice)
+                : (prevPrice - curPrice);
+
+        uint256 changeBps =
+            (diff * 10_000) / prevPrice;
+
+        if (changeBps <= PRICE_IMPACT_BPS)
+            return (false, bytes(""));
+
+        bool r0Up = cur.r0 > prev.r0;
+        bool r1Up = cur.r1 > prev.r1;
+
+        if (r0Up == r1Up)
+            return (false, bytes(""));
+
+        return (
+            true,
+            abi.encode(
+                PAIR,
+                prevPrice,
+                curPrice,
+                changeBps,
+                cur.blockNumber
+            )
+        );
+    }
+
+    function version() external pure override returns (string memory) {
+        return "SwapBurstHeuristicTrap v1.0";
     }
 }
